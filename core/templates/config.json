@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "main": "claude",
+  "reviewer": "codex",
+  "reviewer_model": null,
+  "guards": {
+    "secret_guard": true,
+    "session_start": true,
+    "danger_guard": true,
+    "feedback_reminder": true,
+    "cross_check_guard": true,
+    "model_guard": true
+  },
+  "cross_check_ttl_min": 120
+}

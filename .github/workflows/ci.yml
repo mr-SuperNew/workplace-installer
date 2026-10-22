@@ -1,0 +1,51 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}, Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15-intel: Intel Mac like the oldest real users; arm64 runners were not acquired (capacity).
+        os: [macos-15-intel, windows-latest]
+        # Private repo: macOS minutes count x10, so one Node version per OS.
+        node: [22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Версии
+        run: |
+          node --version
+          git --version
+      - name: Проверка перед публикацией (имена, контакты, личные данные)
+        run: node scripts/check-no-private.js .
+      - name: Тесты модулей
+        run: |
+          node modules/vscode/focus-view.test.js
+          node modules/migrate-project/migrate-project.test.js
+      - name: Все тесты на заглушках
+        run: node tests/run-all.js
+
+  negative:
+    name: негативные проверки (возврат старого опасного поведения должен ронять тесты)
+    # Takes 40+ minutes: run by hand (Actions → tests → Run workflow), not on every push.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Негативные мутации
+        run: node tests/negative/run.js

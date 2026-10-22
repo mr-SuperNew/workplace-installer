@@ -1,0 +1,7 @@
+{
+  "name": "vscode",
+  "version": "4.0.0-rc.1",
+  "requires_core": ">=4.0.0",
+  "skills": [],
+  "hooks": []
+}
