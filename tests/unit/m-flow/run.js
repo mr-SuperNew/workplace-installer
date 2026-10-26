@@ -136,7 +136,7 @@ try {
   e = thr(() => inst.requireHuman({ root: fake, yes: true, humanSaid: 'нет, не надо' }, 'install claude', ['claude']));
   ok('«нет, не надо»: отказ', e instanceof u.WpError, e && e.message);
   const c1 = inst.requireHuman({ root: fake, yes: true, humanSaid: 'Да, ставь' }, 'install claude', ['claude']);
-  ok('слова с «да» при пустом сторожe: цитата не доказательство, пометка «подтверждено запросом разрешения программы, а не механизмом пакета», verified: false', c1.via === 'подтверждено запросом разрешения программы, а не механизмом пакета' && c1.via === inst.NATIVE_PROMPT_ONLY && c1.verified === false && !('quote' in c1), JSON.stringify(c1));
+  ok('слова с «да» при пустом сторожe: цитата не доказательство, пометка «не проверено пакетом: подтвердить должен был человек в окне разрешения программы; если программа работала без запросов, подтверждения не было», слова «подтверждено» нет, verified: false', c1.via === 'не проверено пакетом: подтвердить должен был человек в окне разрешения программы; если программа работала без запросов, подтверждения не было' && !/подтверждено/.test(c1.via) && c1.via === inst.NATIVE_PROMPT_ONLY && c1.verified === false && !('quote' in c1), JSON.stringify(c1));
   ok('цитата ИИ записана отдельно как claimedByAi (не как слова человека)', c1.claimedByAi === 'Да, ставь', JSON.stringify(c1));
   ok('пометки «сообщение человека» и verified: true в записи без сторожа нет', !/сообщение человека/.test(c1.via) && c1.verified !== true, JSON.stringify(c1));
   const rep = require(path.join(H.KIT, 'core', 'lib', 'report.js'));
@@ -148,12 +148,12 @@ try {
     const txt = rep.build(ROOT, {});
     const stU = stateLib.need(ROOT); stU.installs.pop(); stateLib.save(ROOT, stU);
     const body = typeof txt === 'string' ? txt : String(txt && (txt.text || txt.md || txt.body || JSON.stringify(txt)));
-    ok('install-report.md: «подтверждено запросом разрешения программы, а не механизмом пакета» и слова ИИ названы словами ИИ', /подтверждено запросом разрешения программы, а не механизмом пакета/.test(body) && /которые передал ИИ, пакет не проверял/.test(body), body.slice(0, 600));
+    ok('install-report.md (install): «не проверено пакетом: подтвердить должен был человек в окне разрешения программы; если программа работала без запросов, подтверждения не было», без слова «подтверждено», слова ИИ названы словами ИИ', body.includes('«да»: не проверено пакетом: подтвердить должен был человек в окне разрешения программы; если программа работала без запросов, подтверждения не было') && !/«да»: подтверждено/.test(body) && /которые передал ИИ, пакет не проверял/.test(body), body.slice(0, 600));
     ok('install-report.md не выдаёт цитату ИИ за «сообщение человека»', !/«да»: сообщение человека/.test(body), body.slice(0, 600));
   } catch (err) { ok('отчёт установки собирается из записи без сторожа', false, String(err && err.stack || err).slice(0, 500)); }
   const instMd = fs.readFileSync(path.join(H.KIT, 'INSTALL.md'), 'utf8');
   ok('INSTALL.md: на установке не включать режимы без запросов (bypass, auto-approve) и не просить человека их включать', /не включай режимы без запросов/.test(instMd) && /bypass permissions/.test(instMd) && /auto-approve/.test(instMd) && /не проси меня их включать/.test(instMd));
-  ok('INSTALL.md: подлинность «да» на этапе 1 проверяет окно разрешения программы, а не пакет', /проверяет не пакет, а сама программа/.test(instMd) && /подтверждено запросом разрешения программы, а не механизмом пакета/.test(instMd));
+  ok('INSTALL.md: подлинность «да» на этапе 1 проверяет окно разрешения программы, а не пакет', /проверяет не пакет, а сама программа/.test(instMd) && instMd.includes('не проверено пакетом: подтвердить должен был человек в окне разрешения программы; если программа работала без запросов, подтверждения не было') && !/подтверждено запросом разрешения программы/.test(instMd));
   consent.record(fake, { prompt: 'поставь клода' });
   e = thr(() => inst.requireHuman({ root: fake, yes: true, humanSaid: 'да, ставь' }, 'install claude', ['claude']));
   ok('сторож видит сообщения: --human-said не помогает, нужно «да» в последнем сообщении (код 3)', e instanceof u.WpError && e.code === 3 && /нет «да»/.test(e.message), e && e.message);

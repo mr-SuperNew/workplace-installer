@@ -11,7 +11,7 @@
 //   update plan|apply --root <папка> [--yes] [--overwrite путь,путь]   (только из нового пакета) обновить установленное; apply берёт «да» из записанных сообщений человека (--yes его не заменяет), --overwrite требует, чтобы человек назвал файлы
 // Из главной папки (node .workplace/core/cli/wp.js ...):
 //   install claude|codex|python|git --yes [--human-said "слова человека"] [--npm] [--dry-run]   поставить недостающее после «да» человека (--yes сам «да» не доказывает: см. install.js, requireHuman)
-//   path-fix [--yes] [--human-said "слова"] [--dry-run]       Mac и Linux: дописать строку PATH в профиль оболочки, если установленная программа не видна в новом окне (только с «да», запись объявляется)
+//   path-fix [--yes] [--human-said "слова"] [--dry-run] [--restore [--from имя-копии]]       Mac и Linux: дописать строку PATH в профиль оболочки; Windows: дописать папку в PATH пользователя (реестр), если установленная программа не видна в новом окне (только с «да», запись объявляется; значение и тип до записи сохраняются, --restore возвращает их, тоже только с «да»; --from выбирает копию из .workplace/backup-profile)
 //   layout [--update]                  раскладка правил, памяти, навыков (чужое не перезаписывается)
 //   hooks status|wire|test [--dry-run] подключение сторожей в .claude/settings.json и .codex/hooks.json
 //   config show|get <ключ>|set <ключ> <значение>|validate
@@ -57,8 +57,8 @@ const backupLib = require(path.join(lib, 'backup'));
 const roles = require(path.join(lib, 'roles'));
 const providers = require(path.join(__dirname, '..', 'providers'));
 
-const BOOL = new Set(['json', 'no-scan', 'plan-only', 'yes', 'live', 'force', 'dry-run', 'update', 'npm', 'no-selftest']);
-const VALUE = new Set(['root', 'main', 'reviewer', 'reviewer-model', 'name', 'email', 'title', 'goal', 'action', 'note', 'overwrite', 'scan', 'instruction', 'stage', 'to', 'dir', 'task-file', 'selftest-timeout', 'human-said']);
+const BOOL = new Set(['json', 'no-scan', 'plan-only', 'yes', 'live', 'force', 'dry-run', 'update', 'npm', 'no-selftest', 'restore']);
+const VALUE = new Set(['root', 'main', 'reviewer', 'reviewer-model', 'name', 'email', 'title', 'goal', 'action', 'note', 'overwrite', 'scan', 'instruction', 'stage', 'to', 'dir', 'task-file', 'selftest-timeout', 'human-said', 'from']);
 const argv = process.argv.slice(2);
 const flags = {};
 const pos = [];
@@ -442,7 +442,7 @@ function cmdUpdate() {
   update.run(pos[1], { root: flags.root, kit: KIT, installed: INSTALLED, yes: !!flags.yes, overwrite }, say);
 }
 function cmdPathFix() {
-  install.pathFix({ root: ROOT, yes: !!flags.yes, humanSaid: flags['human-said'], dryRun: !!flags['dry-run'] }, say);
+  install.pathFix({ root: ROOT, yes: !!flags.yes, humanSaid: flags['human-said'], dryRun: !!flags['dry-run'], restore: !!flags.restore, from: flags.from }, say);
 }
 function cmdInstall() {
   install.install(pos[1], { root: ROOT, yes: !!flags.yes, humanSaid: flags['human-said'], npm: !!flags.npm, dryRun: !!flags['dry-run'], force: !!flags.force }, say);

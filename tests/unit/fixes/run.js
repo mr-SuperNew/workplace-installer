@@ -9,6 +9,10 @@
 //   M3  verify all не включает P5.report
 //   M4  config.toml Codex: доверие папкам и хукам это вопрос (C), не тревога (A)
 //   M5  path-fix: строка PATH в профиль только по «да», с объявлением и копией
+//   U   проверка Codex после 0547365 (build/reports/U-pathfix-security.md): H2 файл вместо реестра только в тестовом режиме, M3 запись PATH одним шагом с типом, M1 длина PATH,
+//       L1 копия с типом и path-fix --restore, M2 settings.json объявляется только при создании или при разнице в autoUpdatesChannel, H1 пометка «подтверждено запросом программы» для path-fix
+//   V   повторная проверка Codex (build/reports/V-pathfix-round2.md): H2 подмены реестра в рабочем коде нет (бэкенд ставят тесты функцией модуля), H1 «не проверено пакетом» вместо «подтверждено»,
+//       M2 первое создание settings.json объявляется только с одним ключом autoUpdatesChannel, рассылка WM_SETTINGCHANGE проверяется и не отменяет сверку, предпросмотр --restore считает дубли, --restore --from
 //   L3  init не молчит о неснятом снимке; L4 npm-путь Claude требует Node 22
 // Всё на заглушках, в фейковом HOME во временных папках; настоящие ~/.claude и ~/.codex не трогаются.
 const fs = require('fs');
@@ -365,11 +369,209 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
       ok('bash на Mac: ~/.bash_profile; bash на Linux: ~/.bashrc; другая оболочка: ~/.profile', inst.pathFixPlan({ shell: '/bin/bash', home, platform: 'darwin', dirs: [] }).profile === '.bash_profile' && inst.pathFixPlan({ shell: '/bin/bash', home, platform: 'linux', dirs: [] }).profile === '.bashrc' && inst.pathFixPlan({ shell: '/usr/bin/fish', home, platform: 'linux', dirs: [] }).profile === '.profile');
       ok('Windows: профили не правятся, понятный отказ', /Windows/.test(inst.pathFixPlan({ shell: '', home: 'C:/Users/user', platform: 'win32', dirs: [] }).error));
       ok('папка npm-global в домашней: строка с $HOME', inst.pathFixPlan({ shell: '/bin/zsh', home, platform: 'darwin', dirs: [home + '/.npm-global/bin'] }).lines[0] === 'export PATH="$HOME/.npm-global/bin:$PATH"');
+      // файл, который установщик Claude Code создал сам (Windows: ~/.claude/settings.json с autoUpdatesChannel), объявляется; нетронутый файл нет
+      const sf = path.join(HOME, '.claude', 'settings.json');
+      ok('selfWritten: файла не было, установщик его создал: объявлен как ~/.claude/settings.json', (H.write(sf, '{"autoUpdatesChannel":"latest"}\n'), inst.selfWritten(sf, null) === '~/.claude/settings.json'));
+      ok('selfWritten: файл не изменился: не объявляется', inst.selfWritten(sf, '{"autoUpdatesChannel":"latest"}\n') === null);
+      ok('selfWritten: файл был, разница только в autoUpdatesChannel: объявлен; файла нет совсем: null', inst.selfWritten(sf, '{}\n') === '~/.claude/settings.json' && (fs.rmSync(sf), inst.selfWritten(sf, null) === null));
+      // M2: любое другое изменение остаётся тревогой
+      H.write(sf, '{"theme":"dark","autoUpdatesChannel":"latest"}\n');
+      ok('selfWritten: файл был, изменился другой ключ (theme): НЕ объявлен (тревога остаётся)', inst.selfWritten(sf, '{"theme":"light","autoUpdatesChannel":"latest"}\n') === null);
+      H.write(sf, '{"autoUpdatesChannel":"latest","hooks":{"x":1}}\n');
+      ok('selfWritten: файл был, добавлен чужой ключ (hooks) рядом с autoUpdatesChannel: НЕ объявлен', inst.selfWritten(sf, '{"autoUpdatesChannel":"stable"}\n') === null);
+      H.write(sf, '{"autoUpdatesChannel":"latest","theme":"dark"}\n');
+      ok('selfWritten: файл был, изменились и свой, и чужой ключ: НЕ объявлен', inst.selfWritten(sf, '{"autoUpdatesChannel":"stable","theme":"light"}\n') === null);
+      ok('selfWritten: файл был и изменился только autoUpdatesChannel (остальные ключи те же): объявлен', (H.write(sf, '{"theme":"dark","autoUpdatesChannel":"latest"}\n'), inst.selfWritten(sf, '{"theme":"dark","autoUpdatesChannel":"stable"}\n') === '~/.claude/settings.json'));
+      ok('selfWritten: прежний файл не разобрать как JSON (или не объект): НЕ объявлен', inst.selfWritten(sf, '{не json') === null && inst.selfWritten(sf, '[1]') === null);
+      fs.rmSync(sf, { force: true });
+      // M2 (второй круг): файла не было - объявляется, только если после разбора JSON в нём ровно один верхний ключ autoUpdatesChannel
+      for (const [label, body] of [['рядом чужой ключ (hooks)', '{"autoUpdatesChannel":"latest","hooks":{"x":1}}'], ['только чужой ключ', '{"theme":"dark"}'], ['пустой объект', '{}'], ['массив', '[{"autoUpdatesChannel":"latest"}]'], ['не JSON', '{не json'], ['пустой файл', '']]) {
+        H.write(sf, body);
+        ok('selfWritten: файла не было, появился с другим содержимым (' + label + '): НЕ объявлен (тревога)', inst.selfWritten(sf, null) === null, body);
+      }
+      H.write(sf, '{\n  "autoUpdatesChannel": "latest"\n}\n');
+      ok('selfWritten: файла не было, появился ровно с одним ключом autoUpdatesChannel (с отступами): объявлен', inst.selfWritten(sf, null) === '~/.claude/settings.json');
+      fs.rmSync(sf, { force: true });
+      // Низкое: учёт количества в предпросмотре восстановления и выбор копии для --restore
+      ok('multiDiff: две одинаковые записи против одной - одна лишняя; порядок не важен; пусто против пусто', JSON.stringify(inst.multiDiff(['A', 'A', 'B'], ['A', 'B'])) === '["A"]' && JSON.stringify(inst.multiDiff(['A', 'B'], ['A', 'A', 'B'])) === '[]' && JSON.stringify(inst.multiDiff(['A', 'B'], ['B', 'A'])) === '[]' && JSON.stringify(inst.multiDiff(['A', 'A', 'A'], ['A'])) === '["A","A"]' && inst.multiDiff([], []).length === 0 && inst.multiDiff(['A', 'A'], ['A', 'A']).length === 0 && JSON.stringify(inst.multiDiff(['A', 'B', 'A'], ['A', 'B'])) === '["A"]');
+      {
+        const rb = path.join(TMP, 'root-backups'); const bd = path.join(rb, '.workplace', 'backup-profile');
+        for (const n of ['user-path.20261001-101010.json', 'user-path.20261002-101010.json', 'user-path-before-restore.20261003-101010.json', 'notes.txt']) H.write(path.join(bd, n), '{}');
+        const thrown = (f) => { try { f(); return null; } catch (e) { return e; } };
+        ok('--restore без --from берёт последнюю копию самого path-fix (user-path.*), а не страховочную', path.basename(inst.chooseBackup(rb, undefined)) === 'user-path.20261002-101010.json');
+        ok('--restore --from <имя>: страховочная копия user-path-before-restore.* выбирается (имя и полный путь внутри backup-profile)', path.basename(inst.chooseBackup(rb, 'user-path-before-restore.20261003-101010.json')) === 'user-path-before-restore.20261003-101010.json' && path.basename(inst.chooseBackup(rb, path.join(bd, 'user-path-before-restore.20261003-101010.json'))) === 'user-path-before-restore.20261003-101010.json');
+        const e1 = thrown(() => inst.chooseBackup(rb, 'user-path.19990101-000000.json')); const e2 = thrown(() => inst.chooseBackup(rb, path.join(TMP, 'elsewhere', 'user-path.20261002-101010.json'))); const e3 = thrown(() => inst.chooseBackup(rb, 'notes.txt'));
+        ok('--restore --from: нет такой копии (код 1, перечень), путь вне backup-profile (код 2), чужое имя файла: отказ', !!e1 && e1.code === 1 && /user-path\.20261002/.test(e1.message) && !!e2 && e2.code === 2 && !!e3);
+        const rb2 = path.join(TMP, 'root-backups-safety-only');
+        H.write(path.join(rb2, '.workplace', 'backup-profile', 'user-path-before-restore.20261003-101010.json'), '{}');
+        ok('--restore без --from при единственной страховочной копии: копии path-fix нет, страховочную молча не берёт (null)', inst.chooseBackup(rb2, undefined) === null);
+        const saved = inst.saveUserPathBackup(rb, { user: 'C:\\X', kind: 'String' }, 'user-path-before-restore');
+        ok('страховочная копия, сохранённая перед восстановлением, доступна для --restore --from по тому же имени', path.basename(inst.chooseBackup(rb, path.basename(saved))) === path.basename(saved));
+      }
+      // H2 (второй круг): в рабочем коде нет подмены реестра файлом ни при каких условиях. Тесты подставляют бэкенд функцией модуля в своём процессе.
+      const coreText = (() => { const out = []; (function walk(d) { for (const it of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, it.name); if (it.isDirectory()) walk(f); else out.push([f, fs.readFileSync(f, 'utf8')]); } })(path.join(H.KIT, 'core')); return out; })();
+      const installSrc = fs.readFileSync(path.join(H.KIT, 'core', 'lib', 'install.js'), 'utf8');
+      ok('H2: рабочий код не читает WP_USER_PATH_FILE и WP_TEST_MODE (статика: ни одного упоминания в core/)', !coreText.some(([, t]) => /WP_USER_PATH_FILE|WP_TEST_MODE/.test(t)), coreText.filter(([, t]) => /WP_USER_PATH_FILE|WP_TEST_MODE/.test(t)).map(([f]) => f).join(', '));
+      ok('H2: рабочий код не читает WP_USER_PATH_FILE (статика): выбор бэкенда не зависит от временных папок и переменных TEMP/TMP/TMPDIR', !/tmpdir|TMPDIR|env\.TEMP|env\.TMP\b/.test(installSrc));
+      {
+        const saved = { f: process.env.WP_USER_PATH_FILE, m: process.env.WP_TEST_MODE };
+        process.env.WP_TEST_MODE = '1'; process.env.WP_USER_PATH_FILE = path.join(os.tmpdir(), 'wp-h2-check', 'user-path.txt');
+        let kindNow = null;
+        try { kindNow = inst.userPathBackend().kind; } finally { for (const [k, v] of [['WP_USER_PATH_FILE', saved.f], ['WP_TEST_MODE', saved.m]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+        ok('H2: рабочий код не читает WP_USER_PATH_FILE (поведение): при WP_TEST_MODE=1 и файле во временной папке бэкенд остаётся реестром', kindNow === 'registry', String(kindNow));
+      }
+      ok('H2: подмена бэкенда - только функция модуля: в core/ нет ни одного её вызова, кроме определения', coreText.every(([f, t]) => !/(?<!function )__setUserPathBackendForTests\(/.test(t)));
+      const memBe = (o) => { o = o || {}; const s = { user: 'C:\\Old', kind: 'ExpandString', calls: [] }; return { s, kind: 'mem', read() { s.calls.push('read'); return { user: s.user, machine: '', kind: s.kind }; }, write(v, k) { s.calls.push('write'); if (o.failWrite) return { ok: false }; s.user = o.corrupt ? v + 'X' : v; s.kind = k; return { ok: true }; }, notify() { s.calls.push('notify'); if (o.throws) throw new Error('boom'); return o.notified === false ? { notified: false, why: 'тест' } : { notified: true }; } }; };
+      {
+        let bad = null; try { inst.__setUserPathBackendForTests({ read() {} }); } catch (e) { bad = e; }
+        const fake = memBe();
+        inst.__setUserPathBackendForTests(fake);
+        const same = inst.userPathBackend() === fake;
+        inst.__setUserPathBackendForTests(null);
+        ok('H2: __setUserPathBackendForTests принимает только бэкенд с read, write, notify; после null возвращается реестр', !!bad && same && inst.userPathBackend().kind === 'registry');
+      }
+      // Рассылка: результат проверяется; запись и сверка отделены от неё
+      ok('Рассылка: интерпретация рассылки: разослано только при ответе notified; ноль, таймаут, ошибка PowerShell и пустой ответ - не разослано', inst.interpretNotify({ ok: true, out: 'notified' }).notified === true && inst.interpretNotify({ ok: true, out: 'notify-zero' }).notified === false && inst.interpretNotify({ ok: false, timedOut: true, out: '' }).notified === false && /таймаут/.test(inst.interpretNotify({ ok: false, timedOut: true, out: '' }).why) && inst.interpretNotify({ ok: false, out: 'notified' }).notified === false && inst.interpretNotify(null).notified === false && inst.interpretNotify({ ok: true, out: '' }).notified === false);
+      ok('Рассылка: результат SendMessageTimeout проверяется (возвращаемое значение не отбрасывается, ноль даёт notify-zero)', /\$r = \[Wp\.Native\]::SendMessageTimeout\(/.test(inst.PS_NOTIFY) && /if \(\$r -ne \[IntPtr\]::Zero\) \{ Write-Output 'notified' \} else \{ Write-Output 'notify-zero' \}/.test(inst.PS_NOTIFY) && !/\[void\]/.test(inst.PS_NOTIFY), inst.PS_NOTIFY);
+      ok('Рассылка: отдельно от записи и короткая (в скрипте записи нет SendMessageTimeout; предел на окно не больше 5 с, на весь вызов не больше 15 с)', !/SendMessageTimeout/.test(inst.PS_WRITE) && (() => { const m = /, 2, (\d+), \[ref\]/.exec(inst.PS_NOTIFY); const t = /NOTIFY_TIMEOUT_MS = (\d+)/.exec(installSrc); return !!m && +m[1] <= 5000 && !!t && +t[1] <= 15000; })());
+      {
+        const run = (o) => { const be = memBe(o); const r = inst.writeAndVerify(be, 'C:\\New', 'String'); return { be, r }; };
+        let x = run({});
+        ok('Рассылка: запись, рассылка, сверка по порядку; всё в порядке: разослано, расхождений нет', x.r.written && x.r.nt.notified && x.r.bad === null && x.be.s.calls.join(',') === 'write,notify,read', x.be.s.calls.join(','));
+        x = run({ notified: false });
+        ok('Рассылка: система не разослала сообщение - сверка записи всё равно выполнена (чтение после рассылки), запись цела', x.r.written && x.r.nt.notified === false && x.r.bad === null && x.be.s.calls.join(',') === 'write,notify,read' && x.be.s.user === 'C:\\New', x.be.s.calls.join(','));
+        x = run({ notified: false, corrupt: true });
+        ok('Рассылка: рассылка не удалась и запись испорчена - сверка всё равно находит расхождение', x.r.written && x.r.nt.notified === false && /не совпало/.test(String(x.r.bad)) && x.be.s.calls.join(',') === 'write,notify,read', JSON.stringify(x.r));
+        x = run({ throws: true });
+        ok('Рассылка: исключение в рассылке не отменяет сверку и считается «не разослано»', x.r.written && x.r.nt.notified === false && x.r.bad === null && x.be.s.calls.join(',') === 'write,notify,read');
+        x = run({ failWrite: true });
+        ok('Рассылка: запись не удалась - рассылки и сверки нет', x.r.written === false && x.be.s.calls.join(',') === 'write');
+        ok('Рассылка: текст «Не разослано, нужен перезапуск программ» при сбое и пустая строка при успехе', /Не разослано, нужен перезапуск программ/.test(inst.notifiedText({ notified: false, why: 'тест' })) && inst.notifiedText({ notified: true }) === '');
+      }
+      // M3: запись значения и типа одним шагом, рассылка после записи
+      ok('M3: PowerShell-запись: Registry.SetValue с RegistryValueKind, без SetEnvironmentVariable и без Set-ItemProperty', /Registry\]::SetValue\(/.test(inst.PS_WRITE) && /RegistryValueKind/.test(inst.PS_WRITE) && !/SetEnvironmentVariable/.test(inst.PS_WRITE) && !/Set-ItemProperty/.test(inst.PS_WRITE), inst.PS_WRITE);
+      ok('M3: сообщение об изменении (WM_SETTINGCHANGE, 0x1A, \'Environment\') уходит отдельным вызовом ПОСЛЕ записи значения и сверки не мешает', /0x1A/.test(inst.PS_NOTIFY) && /'Environment'/.test(inst.PS_NOTIFY) && /SendMessageTimeout\(/.test(inst.PS_NOTIFY) && !/SetValue\(/.test(inst.PS_NOTIFY) && /SetValue\(/.test(inst.PS_WRITE));
+      ok('M1: пределы длины заданы: 32767 (отказ) и 8191 (предупреждение)', inst.PATH_LIMIT_HARD === 32767 && inst.PATH_LIMIT_CMD === 8191);
       const root = makeRoot('root-m5', 'claude');
+      const UPF = path.join(HOME, '.wp-user-path.txt');   // файл вместо реестра: на бэкенд его ставит только обёртка tests/lib/wp-with-backend.js, окружением он не выбирается
+      const wpB = (rootDir, args, o) => { o = o || {}; return H.nodeWithPathBackend(path.join(rootDir, '.workplace', 'core', 'cli', 'wp.js'), UPF, o.be, args, { cwd: rootDir, env: o.env || ENV }); };
+      let h1 = null;   // что нужно проверке H1 (согласие и отчёт) от ветки своей ОС: целевой файл PATH, окружение, сброс в исходное
       if (process.platform === 'win32') {
-        const r = wpIn(root, ['path-fix', '--yes']);
-        ok('Windows: path-fix отказывается (код 3), ничего не записано', r.code === 3 && /Windows/.test(r.all), r.all);
-        console.log('  (запись в профиль проверяется на Mac и Linux в CI: на Windows профилей оболочки нет)');
+        // Windows: PATH пользователя в реестре. В тесте вместо реестра файл, который подставляет обёртка wp-with-backend.js (настоящий реестр не трогается).
+        const upf = UPF;
+        ok('в окружении теста нет WP_USER_PATH_FILE и WP_TEST_MODE: файл подставляет только обёртка, настоящий реестр защищён', !ENV.WP_USER_PATH_FILE && !ENV.WP_TEST_MODE && !!upf && upf.startsWith(HOME));
+        let guarded = null; try { H.node(path.join(root, '.workplace', 'core', 'cli', 'wp.js'), ['path-fix', '--yes', '--human-said', 'да'], { cwd: root, env: ENV }); } catch (e) { guarded = e; }
+        ok('Windows: стенд не даёт тесту запустить path-fix с записью мимо обёртки бэкенда (страховка от записи в настоящий реестр)', !!guarded && /обёртки бэкенда/.test(guarded.message));
+        const bin = path.join(HOME, '.local', 'bin'); fs.mkdirSync(bin, { recursive: true });
+        fs.copyFileSync(path.join(BIN, 'claude.cmd'), path.join(bin, 'claude.cmd')); fs.copyFileSync(path.join(BIN, 'stub.js'), path.join(bin, 'stub.js'));
+        fs.mkdirSync(path.join(TMP, 'bin-no-claude'), { recursive: true });
+        const envW = Object.assign({}, ENV, { PATH: H.minPath([path.join(TMP, 'bin-no-claude')]) });
+        const oldPath = 'C:\\Tools;%USERPROFILE%\\bin';
+        H.write(upf, oldPath + '\n');
+        const before = H.sha(upf);
+        let r = wpB(root, ['path-fix', '--dry-run'], { env: envW });
+        ok('Windows: path-fix --dry-run показывает папку .local\\bin, PATH не изменён', r.code === 0 && /PATH пользователя/.test(r.out) && /\.local\/bin/.test(r.out) && H.sha(upf) === before, r.all);
+        r = wpB(root, ['path-fix'], { env: envW });
+        ok('Windows: path-fix без --yes: отказ (код 2), PATH не изменён', r.code === 2 && H.sha(upf) === before, r.all);
+        r = wpB(root, ['path-fix', '--yes'], { env: envW });
+        ok('Windows: path-fix --yes без слов человека: отказ (код 2), PATH не изменён', r.code === 2 && H.sha(upf) === before, r.all);
+        r = wpB(root, ['path-fix', '--yes', '--human-said', 'да, допиши PATH'], { env: envW });
+        const afterTxt = text(upf).trim();
+        ok('Windows: path-fix --yes: папка дописана в конец, прежние записи (в том числе %USERPROFILE%) целы', r.code === 0 && afterTxt.startsWith(oldPath + ';') && afterTxt.toLowerCase().endsWith(path.join(HOME, '.local', 'bin').toLowerCase()), r.all + afterTxt);
+        const bdir = path.join(root, '.workplace', 'backup-profile');
+        const bak = fs.readdirSync(bdir).filter((f) => /^user-path\.\d{8}-\d{6}\.json$/.test(f));
+        const bakJ = bak.length === 1 ? readJson(path.join(bdir, bak[0])) : null;
+        ok('Windows (L1): копия прежнего PATH хранит точное значение и тип; запись объявлена в state.json', !!bakJ && bakJ.value === oldPath && bakJ.kind === 'ExpandString' && readJson(path.join(root, '.workplace', 'state.json')).declared.some((d) => /PATH пользователя/.test(d)), JSON.stringify(bak));
+        ok('Windows (M3): после записи прочитан тот же тип (REG_EXPAND_SZ) и значение совпало', text(upf + '.kind').trim() === 'ExpandString' && /тип REG_EXPAND_SZ, значение совпало/.test(r.out), r.all);
+        const once = text(upf);
+        r = wpB(root, ['path-fix', '--yes', '--human-said', 'да, допиши PATH'], { env: envW });
+        ok('Windows: повторный path-fix --yes: дубля нет', r.code === 0 && text(upf) === once, r.all);
+        const wp = (a) => wpB(root, ['path-fix'].concat(a), { env: envW });
+        const YES = ['--yes', '--human-said', 'да, допиши PATH'];
+        const written = text(upf);
+        // L1: path-fix --restore возвращает значение и тип, только после «да»
+        r = wp(['--restore', '--dry-run']);
+        ok('Windows (L1): --restore --dry-run показывает, что будет убрано, PATH не изменён', r.code === 0 && /\.local\/bin/.test(r.out) && /Уберу/.test(r.out) && text(upf) === written, r.all);
+        r = wp(['--restore']);
+        ok('Windows (L1): --restore без --yes: отказ (код 2), PATH не изменён', r.code === 2 && text(upf) === written, r.all);
+        r = wp(['--restore', '--yes']);
+        ok('Windows (L1): --restore --yes без слов человека: отказ (код 2), PATH не изменён', r.code === 2 && text(upf) === written, r.all);
+        r = wp(['--restore', '--yes', '--human-said', 'нет, не надо']);
+        ok('Windows (L1): --restore со словами без «да»: отказ, PATH не изменён', r.code === 2 && text(upf) === written, r.all);
+        fs.writeFileSync(upf + '.kind', 'String\n');   // тип сменился после записи: restore должен вернуть тот, что в копии
+        r = wp(['--restore'].concat(YES));
+        ok('Windows (L1): --restore --yes со словами «да»: значение и тип из копии (ExpandString) возвращены', r.code === 0 && text(upf).trim() === oldPath && text(upf + '.kind').trim() === 'ExpandString' && /тип REG_EXPAND_SZ, значение совпало с копией/.test(r.out), r.all);
+        ok('Windows (L1): значение до восстановления сохранено отдельной копией, запись о возврате объявлена и подтверждена как путь-fix', fs.readdirSync(bdir).some((f) => /^user-path-before-restore\./.test(f) && readJson(path.join(bdir, f)).value === written.trim()) && readJson(path.join(root, '.workplace', 'state.json')).installs.some((i) => i.id === 'path-fix-restore' && i.confirmation && i.confirmation.verified === false));
+        r = wp(['--restore'].concat(YES));
+        ok('Windows (L1): повторный --restore: «возвращать нечего», код 0', r.code === 0 && /возвращать нечего/.test(r.out) && text(upf).trim() === oldPath, r.all);
+        // M3 / L1: тип String сохраняется и в копии, и после записи, и при возврате
+        const rootK = makeRoot('root-m5-kind', 'claude');
+        const envK = envW;
+        H.write(upf, 'C:\\Tools\n'); fs.writeFileSync(upf + '.kind', 'String\n');
+        r = wpB(rootK, ['path-fix'].concat(YES), { env: envK });
+        const bakK = fs.readdirSync(path.join(rootK, '.workplace', 'backup-profile')).filter((f) => /^user-path\.\d/.test(f));
+        ok('Windows (M3): тип REG_SZ не превращается в REG_EXPAND_SZ при записи; в копии тоже String', r.code === 0 && text(upf + '.kind').trim() === 'String' && /тип REG_SZ, значение совпало/.test(r.out) && bakK.length === 1 && readJson(path.join(rootK, '.workplace', 'backup-profile', bakK[0])).kind === 'String', r.all);
+        fs.writeFileSync(upf + '.kind', 'ExpandString\n'); H.write(upf, 'C:\\Other\n');
+        r = wpB(rootK, ['path-fix', '--restore'].concat(YES), { env: envK });
+        ok('Windows (L1): --restore возвращает значение C:\\Tools и тип String из копии', r.code === 0 && text(upf).trim() === 'C:\\Tools' && text(upf + '.kind').trim() === 'String', r.all);
+        // M1: длина PATH
+        const root1 = makeRoot('root-m5-len', 'claude');
+        const binLow = path.join(HOME, '.local', 'bin').toLowerCase();
+        H.write(upf, 'C:\\Tools;;\n'); fs.writeFileSync(upf + '.kind', 'ExpandString\n');
+        r = wpB(root1, ['path-fix'].concat(YES), { env: envW });
+        ok('Windows (M1): пустых элементов нет (хвостовая «;» не даёт «;;»)', r.code === 0 && !/;;/.test(text(upf)) && text(upf).trim().toLowerCase() === 'c:\\tools;' + binLow, r.all + text(upf));
+        H.write(upf, 'C:\\Tools;' + path.join(HOME, '.local', 'bin').toUpperCase() + '\n');
+        const dupBefore = H.sha(upf);
+        r = wpB(root1, ['path-fix'].concat(YES), { env: envW });
+        ok('Windows (M1): папка уже есть в PATH (другой регистр): дубль не добавляется, PATH не изменён', r.code === 0 && H.sha(upf) === dupBefore, r.all);
+        H.write(upf, 'C:\\' + 'a'.repeat(8300) + '\n');
+        r = wpB(root1, ['path-fix'].concat(YES), { env: envW });
+        ok('Windows (M1): результат больше 8191 символа: предупреждение, запись выполнена', r.code === 0 && /больше 8191/.test(r.out) && text(upf).length > 8191 && text(upf).toLowerCase().includes(binLow), r.all.slice(0, 600));
+        H.write(upf, 'C:\\' + 'a'.repeat(32760) + '\n');
+        const hugeBefore = H.sha(upf);
+        r = wpB(root1, ['path-fix'].concat(YES), { env: envW });
+        ok('Windows (M1): результат больше 32767 символов: отказ (код 3), PATH не изменён', r.code === 3 && /32767/.test(r.all) && H.sha(upf) === hugeBefore, r.all.slice(0, 600));
+        r = wpB(root1, ['path-fix', '--dry-run'], { env: envW });
+        ok('Windows (M1): отказ по длине и в пробном запуске', r.code === 3 && H.sha(upf) === hugeBefore, r.all.slice(0, 400));
+        // Рассылка (второй круг): результат проверяется, сверка выполняется всегда, в том числе при сбое рассылки; бэкенд подставляет обёртка tests/lib/wp-with-backend.js
+        const rootN = makeRoot('root-m5-notify', 'claude');
+        const callsOf = () => text(upf + '.calls').trim().split(/\r?\n/).join(',');
+        const resetN = () => { H.write(upf, 'C:\\Tools\n'); fs.writeFileSync(upf + '.kind', 'ExpandString\n'); fs.rmSync(upf + '.calls', { force: true }); };
+        resetN();
+        r = wpB(rootN, ['path-fix'].concat(YES), { env: envW, be: {} });
+        ok('Windows (рассылка): система подтвердила рассылку: запись, рассылка, чтение для сверки; про перезапуск не сказано', r.code === 0 && callsOf() === 'read,write,notify,read' && !/не разослано/i.test(r.out) && /значение совпало/.test(r.out), r.all + callsOf());
+        resetN();
+        r = wpB(rootN, ['path-fix'].concat(YES), { env: envW, be: { notify: false } });
+        ok('Windows (рассылка): система не подтвердила рассылку: «не разослано, нужен перезапуск программ», запись выполнена и сверена, код 0', r.code === 0 && /не разослано, нужен перезапуск программ/i.test(r.out) && /значение совпало/.test(r.out) && callsOf() === 'read,write,notify,read' && text(upf).toLowerCase().includes(binLow), r.all + callsOf());
+        resetN();
+        r = wpB(rootN, ['path-fix'].concat(YES), { env: envW, be: { notify: 'throw' } });
+        ok('Windows (рассылка): рассылка упала с исключением: то же «не разослано», сверка выполнена', r.code === 0 && /не разослано, нужен перезапуск программ/i.test(r.out) && /значение совпало/.test(r.out) && callsOf() === 'read,write,notify,read', r.all + callsOf());
+        resetN();
+        r = wpB(rootN, ['path-fix'].concat(YES), { env: envW, be: { notify: false, corrupt: true } });
+        ok('Windows (рассылка): рассылка не удалась и запись испорчена: сверка всё равно выполнена и сообщает расхождение (код 1)', r.code === 1 && /значение после записи не совпало/.test(r.all) && callsOf() === 'read,write,notify,read', r.all + callsOf());
+        resetN();
+        r = wpB(rootN, ['path-fix'].concat(YES), { env: envW, be: { failWrite: true } });
+        ok('Windows (рассылка): запись не удалась: код 1, ни рассылки, ни сверки', r.code === 1 && callsOf() === 'read,write', r.all + callsOf());
+        resetN();
+        wpB(rootN, ['path-fix'].concat(YES), { env: envW, be: {} });
+        r = wpB(rootN, ['path-fix', '--restore'].concat(YES), { env: envW, be: { notify: false } });
+        ok('Windows (рассылка): --restore при сбое рассылки тоже пишет «не разослано, нужен перезапуск программ» и сверяет запись', r.code === 0 && /не разослано, нужен перезапуск программ/i.test(r.out) && /значение совпало с копией/.test(r.out), r.all);
+        // Низкое (второй круг): предпросмотр восстановления считает дубли с учётом количества; страховочная копия доступна через --from
+        const rootD = makeRoot('root-m5-dup', 'claude');
+        H.write(upf, 'C:\\A;C:\\B\n'); fs.writeFileSync(upf + '.kind', 'ExpandString\n');
+        wpB(rootD, ['path-fix'].concat(YES), { env: envW });
+        H.write(upf, 'C:\\A;C:\\A;C:\\B\n');
+        r = wpB(rootD, ['path-fix', '--restore', '--dry-run'], { env: envW });
+        ok('Windows (L1): предпросмотр --restore считает дубли с учётом количества: лишний C:\\A будет убран, а не «ничего»', r.code === 0 && /Уберу: C:[\\/]A\. /.test(r.out) && /Верну: \(ничего\)/.test(r.out), r.all);
+        r = wpB(rootD, ['path-fix', '--restore'].concat(YES), { env: envW });
+        const bdirD = path.join(rootD, '.workplace', 'backup-profile');
+        const safety = fs.readdirSync(bdirD).find((f) => /^user-path-before-restore\./.test(f));
+        ok('Windows (L1): после --restore сказано, как вернуть обратно: --restore --from <страховочная копия>', r.code === 0 && text(upf).trim() === 'C:\\A;C:\\B' && !!safety && r.out.includes('--restore --from ' + safety), r.all);
+        r = wpB(rootD, ['path-fix', '--restore', '--from', safety].concat(YES), { env: envW });
+        ok('Windows (L1): --restore --from <страховочная копия>: значение до восстановления возвращено', r.code === 0 && text(upf).trim() === 'C:\\A;C:\\A;C:\\B', r.all);
+        r = wpB(rootD, ['path-fix', '--restore', '--from', 'user-path.19990101-000000.json', '--dry-run'], { env: envW });
+        ok('Windows (L1): --restore --from несуществующей копии: отказ (код 1), PATH не изменён', r.code === 1 && /нет/.test(r.all) && text(upf).trim() === 'C:\\A;C:\\A;C:\\B', r.all);
+        h1 = { file: upf, env: envW, reset: () => { H.write(upf, oldPath + '\n'); fs.writeFileSync(upf + '.kind', 'ExpandString\n'); } };
       } else {
         const bin = path.join(HOME, '.local', 'bin'); fs.mkdirSync(bin, { recursive: true });
         for (const n of ['claude']) fs.copyFileSync(path.join(BIN, n), path.join(bin, n));
@@ -388,6 +590,31 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
         const once = text(zshrc);
         r = wpIn(root, ['path-fix', '--yes', '--human-said', 'да, допиши PATH'], { env: envZ });
         ok('повторный path-fix --yes: дубля строки нет', text(zshrc) === once, r.all);
+        h1 = { file: zshrc, env: envZ, reset: () => { H.write(zshrc, '# мой zshrc\n'); } };
+      }
+      // H1: на этапе 1 подлинность «да» проверяет окно разрешения программы, а не пакет; path-fix честно пишет это в отчёт, как install.
+      // Строже сделать нельзя без поломки установки: сторож сообщений подключается шагом 8 (после path-fix на шаге 6), записей до него нет. Когда записи есть, слова ИИ не принимаются совсем.
+      {
+        const H1_TEXT = 'не проверено пакетом: подтвердить должен был человек в окне разрешения программы; если программа работала без запросов, подтверждения не было';
+        const YES = ['--yes', '--human-said', 'да, допиши PATH'];
+        const rootH = makeRoot('root-m5-h1', 'claude');
+        h1.reset();
+        let r = wpB(rootH, ['path-fix'].concat(YES), { env: h1.env });
+        const pf = readJson(path.join(rootH, '.workplace', 'state.json')).installs.filter((i) => i.id === 'path-fix').pop();
+        ok('H1: path-fix без записей сторожа: подтверждение помечено «не проверено пакетом: ...», verified: false, слова ИИ отдельно (claimedByAi)', r.code === 0 && !!pf && pf.confirmation.via === inst.NATIVE_PROMPT_ONLY && pf.confirmation.via === H1_TEXT && pf.confirmation.verified === false && pf.confirmation.claimedByAi === 'да, допиши PATH', r.all + JSON.stringify(pf));
+        r = wpIn(rootH, ['report'], { env: h1.env });
+        const body = fs.existsSync(path.join(rootH, 'install-report.md')) ? text(path.join(rootH, 'install-report.md')) : '';
+        ok('H1: install-report.md: строка path-fix без слова «подтверждено», с текстом «не проверено пакетом: подтвердить должен был человек в окне разрешения программы; если программа работала без запросов, подтверждения не было» и «слова, которые передал ИИ, пакет не проверял»', body.includes('- path-fix') && (body.split('\n').find((l) => l.startsWith('- path-fix')) || '').includes('«да»: ' + H1_TEXT) && !/- path-fix[^\n]*подтверждено/.test(body) && /- path-fix[^\n]*которые передал ИИ, пакет не проверял/.test(body), r.all.slice(0, 300) + body.slice(0, 800));
+        const rootR = makeRoot('root-m5-h1b', 'claude');
+        h1.reset();
+        const sha0 = H.sha(h1.file);
+        H.humanSays(rootR, 'что ты собираешься делать с PATH?', h1.env);
+        r = wpB(rootR, ['path-fix'].concat(YES), { env: h1.env });
+        ok('H1: сторож подключён (записи есть): слова ИИ из --human-said не принимаются, в последнем сообщении человека нет «да»: отказ (код 3), файл не изменён', r.code === 3 && /нет «да»/.test(r.all) && H.sha(h1.file) === sha0, r.all);
+        H.humanSays(rootR, 'да, допиши PATH', h1.env);
+        r = wpB(rootR, ['path-fix', '--yes'], { env: h1.env });
+        const pf2 = readJson(path.join(rootR, '.workplace', 'state.json')).installs.filter((i) => i.id === 'path-fix').pop();
+        ok('H1: «да» в сообщении человека, записанном сторожем, и без --human-said: запись выполнена, verified: true', r.code === 0 && H.sha(h1.file) !== sha0 && !!pf2 && pf2.confirmation.verified === true, r.all + JSON.stringify(pf2));
       }
     }
 

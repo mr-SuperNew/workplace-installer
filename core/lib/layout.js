@@ -90,7 +90,7 @@ function init(o) {
   if (bad.length) throw new u.WpError(bad.join('; '), 2);
   const g = makeGuard(root);
   const report = [];
-  const kitVersion = (u.readText(path.join(o.kit, 'VERSION')) || '4.0.0-rc.1').trim();
+  const kitVersion = (u.readText(path.join(o.kit, 'VERSION')) || '4.0.0-rc.2').trim();
   g.mk(root);
   const wp = path.join(root, rootLib.MARK);
   g.mk(wp);

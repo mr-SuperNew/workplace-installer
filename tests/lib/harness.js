@@ -97,7 +97,7 @@ function minPath(extraFirst, o) {
 function sandboxEnv(home, o) {
   o = o || {};
   const e = Object.assign({}, process.env);
-  for (const k of ['CODEX_HOME', 'CLAUDE_PROJECT_DIR', 'CODEX_SANDBOX_NETWORK_DISABLED', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'WP_TEST_TMP', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete e[k];
+  for (const k of ['WP_USER_PATH_FILE', 'WP_TEST_MODE', 'CODEX_HOME', 'CLAUDE_PROJECT_DIR', 'CODEX_SANDBOX_NETWORK_DISABLED', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'WP_TEST_TMP', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete e[k];
   Object.assign(e, {
     WP_HOME: home, HOME: home, USERPROFILE: home,
     APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local'),
@@ -112,8 +112,15 @@ function sandboxEnv(home, o) {
 
 // ---------- запуск ----------
 const winQuote = (a) => (a === '' ? '""' : /[\s"&|<>^()%!]/.test(a) ? '"' + String(a).replace(/"/g, '\\"') + '"' : String(a));
+// Страховка: на Windows запись path-fix без обёртки бэкенда ушла бы в настоящий реестр. Такой запуск тест сделать не может (чтение в --dry-run допускается).
+function guardRealRegistry(cmd, args) {
+  if (!IS_WIN || cmd !== process.execPath || !Array.isArray(args)) return;
+  const i = args.findIndex((a) => /[\\/]wp\.js$/i.test(String(a)));
+  if (i >= 0 && args[i + 1] === 'path-fix' && !args.includes('--dry-run')) throw new Error('тест запускает path-fix без обёртки бэкенда (H.nodeWithPathBackend): запись ушла бы в настоящий реестр Windows');
+}
 function run(cmd, args, o) {
   o = o || {};
+  guardRealRegistry(cmd, args);
   const viaShell = IS_WIN && !/\.exe$/i.test(cmd) && cmd !== process.execPath;   // .cmd-обёртки Windows запускаются только через оболочку
   const r = viaShell
     ? cp.spawnSync([cmd, ...(args || [])].map(winQuote).join(' '), { cwd: o.cwd, input: o.input, encoding: 'utf8', timeout: o.timeout || 120000, env: o.env || process.env, windowsHide: true, shell: true })
@@ -121,6 +128,9 @@ function run(cmd, args, o) {
   return { code: r.status, out: String(r.stdout || ''), err: String(r.stderr || ''), all: String(r.stdout || '') + String(r.stderr || '') };
 }
 const node = (script, args, o) => run(process.execPath, [script, ...(args || [])], o);
+// wp.js с подставленным в этом же процессе бэкендом PATH пользователя (файл вместо реестра): единственный способ для тестов обойти реестр, в рабочем коде его нет.
+const WP_BACKEND = path.join(__dirname, 'wp-with-backend.js');
+const nodeWithPathBackend = (wpScript, pathFile, backendOpts, args, o) => run(process.execPath, [WP_BACKEND, wpScript, pathFile, JSON.stringify(backendOpts || {}), ...(args || [])], o);
 // Асинхронный запуск (для параллельных прогонов): Promise<{code,out,err,all}>
 function nodeAsync(script, args, o) {
   o = o || {};
@@ -173,5 +183,5 @@ function humanSays(root, text, env) {
 
 module.exports = {
   humanSays, KIT, WP_SRC, IS_WIN, Suite, mkTmp, rmTree, write, read, exists, sha, readJson, treeHash, treeMap, mapDiff, mapDiffText,
-  findOnPath, minPath, sandboxEnv, run, node, nodeAsync, git, makeForeignRepo, repoState,
+  findOnPath, minPath, sandboxEnv, run, node, nodeWithPathBackend, WP_BACKEND, nodeAsync, git, makeForeignRepo, repoState,
 };

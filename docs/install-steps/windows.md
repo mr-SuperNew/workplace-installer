@@ -25,7 +25,7 @@
 - Новое окно: `where.exe node claude codex git`.
 - Полный путь: `& "$env:USERPROFILE\.local\bin\claude.exe" --version`.
 
-Проверить, что папка `.local\bin` есть в PATH: `$env:PATH -split ';' | Select-String '\.local\\bin'`. Если её нет, добавьте в пользовательский PATH (запись входит в план установки; по отдельной просьбе: показ разницы и ваше «да»): `$p=[Environment]::GetEnvironmentVariable('PATH','User'); [Environment]::SetEnvironmentVariable('PATH',"$p;$env:USERPROFILE\.local\bin",'User')`. Затем закройте и откройте программу, в которой работаете.
+Проверить, что папка `.local\bin` есть в PATH: `$env:PATH -split ';' | Select-String '\.local\\bin'`. Если её нет (так бывает после установщика Claude Code), выполните `node .workplace/core/cli/wp.js path-fix --yes --human-said "слова человека с «да»"`: он допишет папку в PATH пользователя одной записью с прежним типом значения, сохранит прежнее значение и тип в `.workplace/backup-profile` и объявит запись (`--dry-run` показывает, что будет записано; `path-fix --restore --yes --human-said "слова человека с «да»"` возвращает сохранённое значение; `--from <имя копии из .workplace/backup-profile>` выбирает другую копию, в том числе сохранённую перед возвратом; если команда пишет «не разослано, нужен перезапуск программ», закройте и откройте программы заново). Вручную, по отдельной просьбе (показ разницы и ваше «да»): `$p=[Environment]::GetEnvironmentVariable('PATH','User'); [Environment]::SetEnvironmentVariable('PATH',"$p;$env:USERPROFILE\.local\bin",'User')`. Затем закройте и откройте программу, в которой работаете.
 
 ## Особенности Windows
 

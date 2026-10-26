@@ -30,6 +30,8 @@ process.stdin.on('end', () => {
     const c = cmd.toLowerCase();
     if (/\b(irm|invoke-restmethod|iwr|invoke-webrequest)\b[^\n]*\|\s*(iex|invoke-expression)\b/.test(c) || /\b(curl|wget)\b[^\n]*\|\s*(sudo\s+)?(ba|z)?sh\b/.test(c)) reasons.push('установщик из сети (скачать и выполнить)');
     if (/\bsetenvironmentvariable\b|\bsetx\b|\breg(\.exe)?\s+(add|delete|import)\b|\b(new|set)-itemproperty\b[^\n]*hk(cu|lm|ey)/.test(c)) reasons.push('запись в реестр или переменные окружения пользователя');
+    // path-fix на Windows пишет PATH пользователя в настоящий реестр. Подмены реестра в рабочем коде нет (бэкенд подставляют только юнит-тесты в своём процессе), поэтому в стенде запись запрещена; --dry-run можно
+    if (process.platform === 'win32' && /wp\.js"?\s+path-fix\b/.test(c) && !/--dry-run/.test(c)) reasons.push('path-fix пишет PATH пользователя в настоящий реестр');
     if (/\b(winget|choco|scoop|brew)\s+(install|upgrade|uninstall|update)\b|\bpip3?\s+(install|uninstall)\b|-m\s+pip\s+(install|uninstall)\b|\bnpm\s+(i|install|update|uninstall)\b[^\n]*(-g|--global)|\bnpm\s+(-g|--global)\s+(i|install|update|uninstall)/.test(c)) reasons.push('установка или обновление программы');
     // настоящий домашний каталог: после вычёркивания путей песочницы не должно остаться упоминаний
     if (REALHOME) {

@@ -1,0 +1,212 @@
+name: clean-install
+
+# Ручной прогон: установка по INSTALL.md на чистой машине, без ИИ и без входа в аккаунты.
+# Шаги - те же команды, которые INSTALL.md велит выполнить ИИ, в том же порядке (init до install, как в шагах 5 и 6 INSTALL.md).
+# Слова согласия в install и path-fix даёт этот скрипт, а не человек: в отчёте установки они помечены как переданные ИИ.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-install:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Что стоит на раннере до начала
+        run: |
+          echo "OUT=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
+          # У настоящего пользователя Mac оболочка zsh (на раннере по умолчанию bash): установщики выбирают профиль по ней.
+          if [ "$RUNNER_OS" = macOS ]; then echo "SHELL=/bin/zsh" >> "$GITHUB_ENV"; fi
+          mkdir -p "$RUNNER_TEMP/out"
+          node --version
+          git --version
+          { command -v claude || echo "claude: нет в PATH"; }
+          { command -v codex || echo "codex: нет в PATH"; }
+
+      # Шаг 2 INSTALL.md
+      - name: Разведка (recon --json)
+        if: ${{ !cancelled() }}
+        run: |
+          node core/cli/wp.js recon --json > "$OUT/recon.json"
+          node core/cli/wp.js recon > "$OUT/recon.md"
+          cat "$OUT/recon.md"
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            console.log("Случай: " + j.case.id + " (" + j.case.why.join("; ") + ")");
+            if (j.case.id !== "empty") { console.error("Ожидался случай empty (на раннере нет ни Claude Code, ни Codex)."); process.exit(1); }
+          ' "$OUT/recon.json"
+
+      # Шаг 3 INSTALL.md
+      - name: План (plan)
+        if: ${{ !cancelled() }}
+        run: node core/cli/wp.js plan | tee "$OUT/plan.md"
+
+      # Шаг 5 INSTALL.md
+      - name: Главная папка (init)
+        if: ${{ !cancelled() }}
+        run: |
+          ROOT="$(node -p "require('path').join(require('os').homedir(),'workplace').split(require('path').sep).join('/')")"
+          echo "WP_ROOT=$ROOT" >> "$GITHUB_ENV"
+          node core/cli/wp.js init --root "$ROOT" | tee "$OUT/init.log"
+          cd "$ROOT"
+          node .workplace/core/cli/wp.js state show | tee "$OUT/state-after-init.txt"
+
+      # Шаг 6 INSTALL.md. Слова согласия передаёт скрипт.
+      - name: Установка Claude Code (официальный установщик)
+        if: ${{ !cancelled() }}
+        run: |
+          cd "$WP_ROOT"
+          node .workplace/core/cli/wp.js install claude --dry-run | tee "$OUT/install-claude-dry.log"
+          node .workplace/core/cli/wp.js install claude --yes --human-said "да, ставь" 2>&1 | tee "$OUT/install-claude.log"
+
+      - name: Установка Codex (официальный установщик)
+        if: ${{ !cancelled() }}
+        run: |
+          cd "$WP_ROOT"
+          node .workplace/core/cli/wp.js install codex --dry-run | tee "$OUT/install-codex-dry.log"
+          node .workplace/core/cli/wp.js install codex --yes --human-said "да, ставь" 2>&1 | tee "$OUT/install-codex.log"
+
+      - name: Что появилось в ~/.claude после установок (чистая машина, секретов нет)
+        if: ${{ !cancelled() }}
+        run: |
+          { ls -la "$HOME/.claude" 2>&1; echo ---; cat "$HOME/.claude/settings.json" 2>&1 || echo "(файла settings.json нет)"; } | tee "$OUT/home-claude-after-install.txt"
+
+      # Новый шаг = новый процесс, окружение берётся от раннера, а не от установщика.
+      - name: claude --version в новом шаге (PATH раннера)
+        id: claude_ver
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          command -v claude
+          claude --version | tee "$OUT/claude-version-newstep.txt"
+
+      - name: codex --version в новом шаге (PATH раннера)
+        id: codex_ver
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          command -v codex
+          codex --version | tee "$OUT/codex-version-newstep.txt"
+
+      # Что видит человек в новом окне терминала. Mac: оболочка zsh с профилями. Windows: PATH из реестра.
+      # Программа не видна: по INSTALL.md шаг 6 выполняется path-fix (слова согласия передаёт скрипт).
+      - name: Новое окно терминала, Mac
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: |
+          fresh() { env -i HOME="$HOME" USER="$USER" TERM=xterm-256color /bin/zsh -l -i -c 'command -v claude && claude --version && command -v codex && codex --version'; }
+          if fresh 2>&1 | tee "$OUT/fresh-window-1.txt"; then
+            echo "path-fix не понадобился" | tee "$OUT/path-check.txt"
+          else
+            echo "В новом окне программы не видны: выполняю path-fix по шагу 6 INSTALL.md" | tee "$OUT/path-check.txt"
+            cd "$WP_ROOT"
+            node .workplace/core/cli/wp.js path-fix --dry-run 2>&1 | tee "$OUT/path-fix-dry.log"
+            node .workplace/core/cli/wp.js path-fix --yes --human-said "да, допиши" 2>&1 | tee "$OUT/path-fix.log"
+            echo "path-fix выполнен" >> "$OUT/path-check.txt"
+            fresh 2>&1 | tee "$OUT/fresh-window-2.txt"
+          fi
+
+      - name: Новое окно терминала, Windows
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: |
+          fresh() { powershell -NoProfile -Command '$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User"); (Get-Command claude -ErrorAction Stop).Source; claude --version; if ($LASTEXITCODE -ne 0) { exit 1 }; (Get-Command codex -ErrorAction Stop).Source; codex --version; if ($LASTEXITCODE -ne 0) { exit 1 }'; }
+          if fresh 2>&1 | tee "$OUT/fresh-window-1.txt"; then
+            echo "path-fix не понадобился" | tee "$OUT/path-check.txt"
+          else
+            echo "В новом окне программы не видны: выполняю path-fix по шагу 6 INSTALL.md" | tee "$OUT/path-check.txt"
+            cd "$WP_ROOT"
+            node .workplace/core/cli/wp.js path-fix --dry-run 2>&1 | tee "$OUT/path-fix-dry.log"
+            node .workplace/core/cli/wp.js path-fix --yes --human-said "да, допиши" 2>&1 | tee "$OUT/path-fix.log"
+            echo "path-fix выполнен" >> "$OUT/path-check.txt"
+            fresh 2>&1 | tee "$OUT/fresh-window-2.txt"
+          fi
+
+      - name: Отметка результата проверки PATH в новом шаге
+        if: ${{ !cancelled() }}
+        run: |
+          echo "claude в новом шаге: ${{ steps.claude_ver.outcome }}; codex в новом шаге: ${{ steps.codex_ver.outcome }}" | tee -a "$OUT/path-check.txt"
+
+      # Шаг 8 INSTALL.md
+      - name: layout, hooks wire, hooks test, gitignore, git-init
+        if: ${{ !cancelled() }}
+        run: |
+          cd "$WP_ROOT"
+          W="node .workplace/core/cli/wp.js"
+          $W layout 2>&1 | tee "$OUT/layout.log"
+          $W hooks wire 2>&1 | tee "$OUT/hooks-wire.log"
+          $W hooks status 2>&1 | tee "$OUT/hooks-status.log"
+          $W hooks test 2>&1 | tee "$OUT/hooks-test.log"
+          $W gitignore check 2>&1 | tee "$OUT/gitignore.log"
+          $W git-init --name "CI runner" --email "ci@example.invalid" 2>&1 | tee "$OUT/git-init.log"
+
+      # Шаг 9 INSTALL.md: сторож секретов отвечает на запись выдуманного пароля.
+      # Прямой запуск хука с JSON на stdin, как это делает Claude Code перед записью файла.
+      - name: Сторож секретов останавливает запись выдуманного пароля
+        if: ${{ !cancelled() }}
+        run: |
+          cd "$WP_ROOT"
+          node - <<'EOF' 2>&1 | tee "$OUT/guard-probe.txt"
+          const cp = require('child_process'), path = require('path');
+          const root = process.env.WP_ROOT;
+          const hook = path.join(root, '.workplace', 'core', 'hooks', 'secret-guard.js');
+          const fake = 'pass' + 'word = "Zq7-demo-0000-not-real"';
+          const run = (content) => cp.spawnSync(process.execPath, [hook], { cwd: root, encoding: 'utf8', timeout: 15000,
+            input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(root, 'checks', 'guard-test.txt'), content }, cwd: root }),
+            env: Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: root }) });
+          const a = run(fake + '\n'), b = run('обычный текст\n');
+          console.log('запись выдуманного пароля: код ' + a.status + ', ответ: ' + String(a.stdout).trim().slice(0, 400));
+          console.log('обычная запись: код ' + b.status + ', ответ: ' + (String(b.stdout).trim().slice(0, 200) || '(пусто)'));
+          let bad = 0;
+          if (!/"deny"/.test(a.stdout)) { console.log('ПРОВАЛ: пароль не остановлен'); bad++; }
+          if (String(a.stdout).includes('Zq7-demo')) { console.log('ПРОВАЛ: значение пароля попало в ответ сторожа'); bad++; }
+          if (/"deny"/.test(b.stdout)) { console.log('ПРОВАЛ: обычная запись остановлена'); bad++; }
+          process.exit(bad ? 1 : 0);
+          EOF
+
+      # Шаг 11 INSTALL.md (без входов в аккаунты: P1.main-login, P1.reviewer-login и P3.selftest не проверяются)
+      - name: verify (без шагов, которым нужен вход)
+        if: ${{ !cancelled() }}
+        run: |
+          cd "$WP_ROOT"
+          node .workplace/core/cli/wp.js verify P0.recon P1.root P1.node P1.python P1.git P1.main P1.reviewer P2.core P2.hooks P2.git P3.hooks-test 2>&1 | tee "$OUT/verify.log"
+
+      - name: snapshot after, snapshot diff, report
+        if: ${{ !cancelled() }}
+        run: |
+          cd "$WP_ROOT"
+          W="node .workplace/core/cli/wp.js"
+          $W snapshot after 2>&1 | tee "$OUT/snapshot-after.log"
+          DIFF=0
+          # Тревога не должна скрыть отчёт, но и не должна пройти молча: шаг падает в конце.
+          $W snapshot diff 2>&1 | tee "$OUT/snapshot-diff.log" || DIFF=1
+          $W report 2>&1 | tee "$OUT/report.log"
+          $W verify P5.report 2>&1 | tee -a "$OUT/verify.log"
+          if [ "$DIFF" != 0 ]; then echo "snapshot diff: тревога (запись вне главной папки не объявлена)"; exit 1; fi
+
+      - name: Собрать файлы для артефакта
+        if: ${{ always() }}
+        run: |
+          mkdir -p "$OUT"
+          for f in install-report.md STATE.md; do
+            if [ -f "$WP_ROOT/$f" ]; then cp "$WP_ROOT/$f" "$OUT/$f"; else echo "нет файла $f" >> "$OUT/missing.txt"; fi
+          done
+          if [ -f "$WP_ROOT/.workplace/state.json" ]; then cp "$WP_ROOT/.workplace/state.json" "$OUT/state.json"; fi
+          ls -la "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: clean-install-${{ matrix.os }}
+          path: ${{ runner.temp }}/out
+          if-no-files-found: warn
